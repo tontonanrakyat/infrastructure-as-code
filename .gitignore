@@ -1,0 +1,15 @@
+# Terraform files
+.terraform/
+*.tfstate
+*.tfstate.backup
+*.tfvars
+*.tfvars.json
+.terraform.lock.hcl
+
+# Personal secrets
+.secrets-bootstrap.json
+id_rsa_labx*
+
+# OS files
+.DS_Store
+Thumbs.db
