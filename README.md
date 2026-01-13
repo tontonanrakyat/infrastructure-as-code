@@ -12,6 +12,7 @@
 * [02. Terraform Foundation](#02-infrastructure-structure-terraform-foundation)
 * [03. Identity Impersonation (Validation)](#03-identity-impersonation-local-robot-test)
 * [04. GitHub Automation (CI/CD)](#04-github-automation-cicd-pipeline)
+* [05. Refactoring & Modularity (Standardization)](#05-refactoring--modularity-standardization)
 
 ---
 
@@ -27,23 +28,27 @@ Persiapan **Management Layer**. Dilakukan manual satu kali untuk menginisialisas
 | **Git** | Standard Installation |
 | **Azure CLI** | `winget install -e --id Microsoft.AzureCLI` |
 | **AWS CLI** | MSI Installer / `brew install awscli` |
-| **GCP SDK** | `curl https://sdk.cloud.google.com |
+| **GCP SDK** | `curl https://sdk.cloud.google.com` |
 
 **Verification:**
 
 ```bash
 terraform -version && az --version && aws --version && gcloud --version
+
 ```
 
 ### B. Cloud Backend Setup (Agnostic Prep)
 
 #### 🔵 Azure Setup
 
+*Penamaan diseragamkan dengan format: st[brand][function]*
+
 ```bash
 # Provisioning Backend State
 az group create --name rg-infra-mgmt --location indonesiacentral
-az storage account create --name staccveritas --resource-group rg-infra-mgmt --location indonesiacentral --sku Standard_LRS
-az storage container create --name tfstate --account-name staccveritas
+az storage account create --name stveritastfstate --resource-group rg-infra-mgmt --location indonesiacentral --sku Standard_LRS
+az storage container create --name tfstate --account-name stveritastfstate
+
 ```
 
 #### 🟠 AWS Setup
@@ -51,6 +56,7 @@ az storage container create --name tfstate --account-name staccveritas
 ```bash
 aws s3api create-bucket --bucket stveritastfstate --region us-east-1
 aws dynamodb create-table --table-name terraform-state-lock --attribute-definitions AttributeName=LockID,AttributeType=S --key-schema AttributeName=LockID,KeyType=HASH --provisioned-throughput ReadCapacityUnits=5,WriteCapacityUnits=5
+
 ```
 
 #### 🟡 GCP Setup
@@ -58,6 +64,7 @@ aws dynamodb create-table --table-name terraform-state-lock --attribute-definiti
 ```bash
 gsutil mb -p [PROJECT_ID] -l asia-southeast2 gs://stveritastfstate/
 gsutil versioning set on gs://stveritastfstate/
+
 ```
 
 ---
@@ -71,6 +78,7 @@ Menciptakan **Identitas Digital** non-manusia untuk robot automasi.
 ```bash
 # Registrasi & Role Assignment (Contributor)
 az ad sp create-for-rbac --name "sp-terraform" --role contributor --scopes /subscriptions/[SUBSCRIPTION_ID] --json-auth
+
 ```
 
 ### B. Security Vault (Azure Key Vault)
@@ -81,6 +89,7 @@ Penerapan prinsip **Encrypt Everything**.
 # Register Provider & Create Vault
 az provider register --namespace Microsoft.KeyVault
 az keyvault create --name "kv-veritas-mgmt" --resource-group "rg-infra-mgmt" --location "indonesiacentral"
+
 ```
 
 ### C. Secret Storage Mapping
@@ -93,6 +102,7 @@ az role assignment create --role "Key Vault Secrets Officer" --assignee [USER_ID
 az keyvault secret set --vault-name "kv-veritas-mgmt" --name "terraform-client-id" --value "[APP/CLIENT_ID]"
 az keyvault secret set --vault-name "kv-veritas-mgmt" --name "terraform-client-secret" --value "[APP/CLIENT_PASSWORD]"
 az keyvault secret set --vault-name "kv-veritas-mgmt" --name "terraform-tenant-id" --value "[TENANT_ID]"
+
 ```
 
 ---
@@ -108,7 +118,8 @@ az keyvault secret set --vault-name "kv-veritas-mgmt" --name "terraform-tenant-i
  ┃ ┗ 📂labx                 # Project Name
  ┃ ┃ ┗ 📂dev                # Stage: Development
  ┃ ┃   ┗ 📄main.tf          # Entry Point Blueprint
- ┣ 📂modules                # Reusable Components
+ ┣ 📂modules                # Reusable Components (Blueprints)
+ ┃ ┗ 📂azure-resource-group # Specific Resource Module
  ┣ 📄.gitignore             # Security Filter
  ┗ 📄README.md
 
@@ -118,9 +129,9 @@ az keyvault secret set --vault-name "kv-veritas-mgmt" --name "terraform-tenant-i
 
 | Step | Command | Description |
 | --- | --- | --- |
-| **1. Init** | `terraform init` | Connect to Cloud Backend & Download Providers |
-| **2. Plan** | `terraform plan` | Dry-run validation (Execution Strategy) |
-| **3. Apply** | `terraform apply` | Provisioning real resources to Cloud |
+| **1. Init** | `terraform init` | Connect to Cloud Backend & Download Providers. **Re-run after adding modules.** |
+| **2. Plan** | `terraform plan` | Dry-run validation (Execution Strategy). |
+| **3. Apply** | `terraform apply` | Provisioning real resources to Cloud. **Git-only on Production.** |
 
 ### C. RCA: State Locking Failure
 
@@ -167,17 +178,42 @@ $env:ARM_SUBSCRIPTION_ID = "[SUBSCRIPTION_ID]"
 
 * **Trigger:** Push to `main` branch or any Pull Request.
 * **Security:** Secrets Masking (`***`) on logs.
-* **Idempotency:** Automatic check on every run.
-
-### C. Pipeline RCA Matrix
-
-| Step | Failure Cause | Remediation |
-| --- | --- | --- |
-| **Init** | Incorrect Backend Config | Verify `backend "azurerm"` block in `main.tf` |
-| **Plan** | Permission Denied | Verify SP Role in IAM Azure |
-| **Apply** | Concurrency Conflict | Break Lease in Azure Storage |
+* **Idempotency:** Automatic check on every run. **Manual Apply is prohibited in main.**
 
 ---
 
+## 05. Refactoring & Modularity (Standardization)
 
+Fase transformasi dari kode *Monolith* ke *Reusable Modules* untuk mencapai skalabilitas Enterprise.
+
+### A. Core Philosophy
+
+* **DRY (Don't Repeat Yourself)**: Satu modul digunakan oleh banyak environment.
+* **Abstraction**: Menyembunyikan kompleksitas resource Azure di belakang variabel sederhana.
+* **State Integrity**: Mengelola "ingatan" Terraform agar tidak terjadi penghapusan data secara tidak sengaja.
+
+### B. The `state mv` Ceremony
+
+Saat memindahkan resource fisik ke dalam modul, alamat resource di dalam State berubah. Gunakan perintah ini untuk memindahkan catatan tanpa menghapus resource asli:
+
+```bash
+# Format: terraform state mv [SOURCE_ADDRESS] [DESTINATION_ADDRESS]
+terraform state mv azurerm_resource_group.rg_dev_app module.rg_app.azurerm_resource_group.this
+
+```
+
+### C. RCA Matrix: Refactoring Issues
+
+| Issue | Root Cause | Remediation |
+| --- | --- | --- |
+| `1 added, 1 destroyed` | Terraform misidentifies refactored code as new resource. | Run `terraform state mv` before applying. |
+| `Module not found` | `terraform init` was not run after adding module block. | Run `terraform init` to download/link modules. |
+| `0 added, 1 changed` | Code changes only affect metadata (tags). | Safe to apply. Expected during standardization. |
+
+### D. Architectural Concepts
+
+* **Backend (Azure Storage)**: Database tempat menyimpan file `.tfstate`. Diperbarui saat `state mv` meskipun infrastruktur tidak berubah.
+* **Infrastructure (Azure Resource Manager)**: Barang fisik (RG, VM, DB). Tidak tersentuh jika hanya melakukan `state mv`.
+
+---
 
