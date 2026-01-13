@@ -21,11 +21,24 @@ provider "azurerm" {
 }
 
 # 3. Test Resource (Resource Group Pertama via IaC)
-resource "azurerm_resource_group" "rg_dev_app" {
-  name     = "rg-labx-dev-app"
-  location = "indonesiacentral"
+# resource "azurerm_resource_group" "rg_dev_app" {
+#   name     = "rg-labx-dev-app"
+#   location = "indonesiacentral"
+#   tags = {
+#     Environment = "Dev"
+#     ManagedBy   = "Terraform"
+#   }
+# }
+
+# 3. Memanggil Modul Resource Group
+module "rg_app" {
+  source              = "../../../modules/azure-resource-group"
+  resource_group_name = "rg-labx-dev-app"
+  location            = "indonesiacentral"
+  
   tags = {
     Environment = "Dev"
-    ManagedBy   = "Terraform"
+    Project     = "LabX"
+    ManagedBy   = "Terraform-Module"
   }
 }
