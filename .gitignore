@@ -5,6 +5,7 @@
 *.tfvars
 *.tfvars.json
 .terraform.lock.hcl
+*.tfplan
 
 # Personal secrets
 .secrets-bootstrap.json

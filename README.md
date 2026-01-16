@@ -49,6 +49,18 @@ az group create --name rg-infra-mgmt --location indonesiacentral
 az storage account create --name stveritastfstate --resource-group rg-infra-mgmt --location indonesiacentral --sku Standard_LRS
 az storage container create --name tfstate --account-name stveritastfstate
 
+
+# Hardening: Enable Blob Versioning (Recovery Point)
+az storage account blob-service-properties update --account-name stveritastfstate --enable-versioning true
+
+# Hardening: Enable Logging (Audit Trail)
+# Menghasilkan container $logs secara otomatis untuk RCA (Root Cause Analysis).
+az storage account blob-service-properties update --account-name stveritastfstate --enable-storage-analytics-logging true --log-version 1.0 --log-read true --log-write true --log-delete true
+
+# Hardening: Resource Lock (Anti-Human Error)
+# Mencegah penghapusan storage account secara tidak sengaja.
+az lock create --name "Lock-State" --lock-type CanNotDelete --resource-group "rg-infra-mgmt" --resource-name "stveritastfstate" --resource-type "Microsoft.Storage/storageAccounts"
+
 ```
 
 #### 🟠 AWS Setup
@@ -120,24 +132,64 @@ az keyvault secret set --vault-name "kv-veritas-mgmt" --name "terraform-tenant-i
  ┃ ┃   ┗ 📄main.tf          # Entry Point Blueprint
  ┣ 📂modules                # Reusable Components (Blueprints)
  ┃ ┗ 📂azure-resource-group # Specific Resource Module
- ┣ 📄.gitignore             # Security Filter
+ ┣ 📄.gitignore             # Security Filter (Excluding .tfplan & secrets)
  ┗ 📄README.md
-
 ```
 
-### B. Operational Commands
+### B. Operational Commands (The Artifact Protocol)
+
+Di level Enterprise, kita menggunakan **Execution Artifacts** (`.tfplan`) untuk memastikan apa yang direncanakan adalah apa yang diterapkan.
 
 | Step | Command | Description |
 | --- | --- | --- |
-| **1. Init** | `terraform init` | Connect to Cloud Backend & Download Providers. **Re-run after adding modules.** |
-| **2. Plan** | `terraform plan` | Dry-run validation (Execution Strategy). |
-| **3. Apply** | `terraform apply` | Provisioning real resources to Cloud. **Git-only on Production.** |
+| **1. Init** | `terraform init` | Sinkronisasi Backend & Provider. **Wajib ulang jika ada modul baru.** |
+| **2. Plan** | `terraform plan -out=deploy.tfplan` | Menghasilkan **Artifact** rencana eksekusi yang terkunci dan aman. |
+| **3. Inspect** | `terraform show deploy.tfplan` | Verifikasi manual/audit terhadap isi rencana sebelum eksekusi. |
+| **4. Apply** | `terraform apply "deploy.tfplan"` | Eksekusi berbasis **Artifact**. Menjamin konsistensi tanpa *drift*. |
 
-### C. RCA: State Locking Failure
+---
 
+### Perubahan Utama (Kritik Objektif):
+
+* **Description Step 3**: Saya merangkum "Verifikasi manual/audit terhadap isi rencana sebelum eksekusi" menjadi "Audit detail rencana eksekusi sebelum benar-benar di-apply."
+* **Kerapian**: Menghilangkan kalimat tambahan yang terlalu panjang agar markdown renderer tidak memaksakan *line-break* pada kolom tersebut.
+
+**Sudah cukup rapi untuk README Anda?** Jika ya, kita tutup buku di **Fase 00-01** dan saya akan kirimkan desain pertama untuk **Section 02: Network Topology**. Kita akan merancang Subnetting yang tidak bisa ditembus sembarangan orang.
+
+
+
+> **⚠️ Security Warning:** File `.tfplan` mengandung data sensitif (Plaintext Secrets). File ini **DILARANG** masuk ke Version Control (Git). Pastikan `*.tfplan` sudah terdaftar di `.gitignore`.
+
+### C. .gitignore Configuration (Zero Trust Filter)
+
+Pastikan file `.gitignore` Anda di root folder minimal mencakup:
+
+```bash
+# Local terraform directories
+.terraform/*
+
+# .tfstate files (Managed by Remote Backend)
+*.tfstate
+*.tfstate.*
+
+# Execution plans (Contain sensitive data)
+*.tfplan
+
+# Sensitive variables
+*.tfvars
+*.tfvars.json
+```
+
+### D. RCA: Operational Failures
+
+* **Issue: State Locking Failure**
 * **Symptom:** Hanging at `Acquiring state lock...`
-* **Root Cause:** Blob Lease is active due to previous process crash.
+* **Root Cause:** Blob Lease aktif akibat proses sebelumnya terhenti paksa (crash/timeout).
 * **Solution:** Azure Portal > Storage Account > `tfstate` Container > Right-click `.tfstate` file > **Break Lease**.
+* **Issue: Drift Detected during Apply**
+* **Symptom:** `Error: Saved plan is stale`.
+* **Root Cause:** Seseorang mengubah infrastruktur di Portal setelah Anda membuat `.tfplan`.
+* **Solution:** Jalankan ulang alur **Plan -> Artifact -> Apply** untuk sinkronisasi ulang.
 
 ---
 
@@ -152,7 +204,6 @@ $env:ARM_CLIENT_ID       = "[APP/CLIENT_ID]"
 $env:ARM_CLIENT_SECRET   = "[APP/CLIENT_PASSWORD]"
 $env:ARM_TENANT_ID       = "[TENANT_ID]"
 $env:ARM_SUBSCRIPTION_ID = "[SUBSCRIPTION_ID]"
-
 ```
 
 ### B. Validation Procedure
@@ -206,14 +257,26 @@ terraform state mv azurerm_resource_group.rg_dev_app module.rg_app.azurerm_resou
 
 | Issue | Root Cause | Remediation |
 | --- | --- | --- |
-| `1 added, 1 destroyed` | Terraform misidentifies refactored code as new resource. | Run `terraform state mv` before applying. |
-| `Module not found` | `terraform init` was not run after adding module block. | Run `terraform init` to download/link modules. |
-| `0 added, 1 changed` | Code changes only affect metadata (tags). | Safe to apply. Expected during standardization. |
+| `1 added, 1 destroyed` | Alamat state dan kode tidak sinkron atau mengubah properti Immutable (e.g., Name/Location). | Cek `state mv` atau kembalikan nama resource agar sama dengan portal. |
+| `Error: Module not installed` | Menjalankan perintah state sebelum mendaftarkan modul baru. | Jalankan `terraform init`. |
+| `The system cannot find path` | Kesalahan relative path pada `source` modul. | Gunakan `Test-Path` untuk verifikasi folder modul. |
+| `0 added, 1 changed` | Perubahan hanya pada properti Mutable (e.g., Tags). | **Safe**. Ini adalah target akhir dari refactoring yang sukses. |
 
-### D. Architectural Concepts
+---
+
+### D. Disaster Recovery (DR) Protocol
+
+* **Blob Versioning**: Jika State rusak (Corrupted), gunakan tab **Versions** di Azure Portal dan pilih **"Make current version"**.
+* **Git Revert**: Untuk membatalkan perubahan infrastruktur, gunakan `git revert` pada commit ID terkait, lalu jalankan `terraform apply` normal.
+* **Sync Rule**: Rollback State wajib dibarengi dengan `git checkout` pada commit ID yang sesuai untuk menjaga konsistensi antara "Ingatan" dan "Niat".
+
+---
+
+### E. Architectural Concepts
 
 * **Backend (Azure Storage)**: Database tempat menyimpan file `.tfstate`. Diperbarui saat `state mv` meskipun infrastruktur tidak berubah.
 * **Infrastructure (Azure Resource Manager)**: Barang fisik (RG, VM, DB). Tidak tersentuh jika hanya melakukan `state mv`.
 
 ---
+
 
