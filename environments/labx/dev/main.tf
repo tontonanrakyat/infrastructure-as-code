@@ -34,10 +34,10 @@ provider "azurerm" {
 module "rg_app" {
   source              = "../../../modules/azure-resource-group"
   resource_group_name = "rg-labx-dev-app"
-  location            = "indonesiacentral"
+  location            = local.location
   
   tags = {
-    Environment = "Dev"
+    Environment = local.environment
     Project     = "LabX"
     ManagedBy   = "Terraform-Module"
   }

@@ -4,11 +4,11 @@ module "nsg_core" {
 
   subnet_name         = each.key
   subnet_id           = each.value
-  location            = "indonesiacentral"
+  location            = local.location
   resource_group_name = module.rg_app.resource_group_name
 
   tags = {
-    Environment = "Dev"
+    Environment = local.environment
     ManagedBy   = "Terraform"
     Tier        = split("-", each.key)[0] # Mengambil T0, T1, dst dari nama
   }
